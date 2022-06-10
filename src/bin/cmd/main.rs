@@ -5,11 +5,27 @@ use sqlstuff::{DbError, MyDB, CRUD};
 async fn main() -> Result<(), DbError> {
     let conn = MyDB::new().await?;
     match Args::parse().cmd {
-        DbAction::CreateUser {username, email} => {
+        DbAction::CreateUser { username, email } => {
             let created_user = conn.create_user(&username, &email).await?;
-            dbg!(created_user);
-        },
-        _ => Err(String::from("unimplemented"))?,
+            println!("Created User {created_user}");
+        }
+        DbAction::UpdateUser {
+            id,
+            username,
+            email,
+        } => {
+            conn.update_user(id, username.as_deref(), email.as_deref())
+                .await?;
+            println!("Updated User {id}");
+        }
+        DbAction::FindUser { id, email } => {
+            let user = conn.find_user(id, email.as_deref()).await?;
+            println!("{user:?}");
+        }
+        DbAction::DeleteUser { id } => {
+            conn.delete_user(id).await?;
+            println!("Deleted User {id}");
+        }
     }
     Ok(())
 }
@@ -19,7 +35,7 @@ async fn main() -> Result<(), DbError> {
 struct Args {
     /// Database action to perform
     #[clap(subcommand)]
-    cmd: DbAction
+    cmd: DbAction,
 }
 
 #[derive(Subcommand)]
@@ -39,18 +55,21 @@ enum DbAction {
         /// id of user
         id: i64,
 
-        #[clap(forbid_empty_values = true)]
+        #[clap(short, long, forbid_empty_values = true)]
         // optional username to update
         username: Option<String>,
 
-        #[clap(forbid_empty_values=true,validator=validate_email)]
+        #[clap(short, long, forbid_empty_values=true,validator=validate_email)]
         /// optional email to update. must be unique
         email: Option<String>,
     },
     /// find existing user
     FindUser {
+        /// id of user
+        #[clap(short, long)]
+        id: Option<i64>,
         /// email of user
-        #[clap(forbid_empty_values=true,validator=validate_email)]
+        #[clap(short, long, forbid_empty_values=true,validator=validate_email)]
         email: Option<String>,
     },
     /// delete existing user

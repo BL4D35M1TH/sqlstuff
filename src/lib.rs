@@ -1,10 +1,10 @@
 use async_trait::async_trait;
 use dotenv::dotenv;
 use sqlx::{
-    migrate, migrate::MigrateError, query_as, sqlite::SqlitePoolOptions, Decode, Encode, Pool,
-    Sqlite,
+    migrate, migrate::MigrateError, query, query_as, sqlite::SqlitePoolOptions, Pool, Sqlite,
 };
 use std::env;
+use thiserror::Error;
 
 #[derive(Debug)]
 pub struct MyDB {
@@ -13,18 +13,6 @@ pub struct MyDB {
 
 #[async_trait]
 impl CRUD for MyDB {
-    async fn create_user(&self, username: &str, email: &str) -> Result<User, DbError> {
-        query_as!(
-            User,
-            "INSERT INTO users (username, email) VALUES ($1, $2) RETURNING *;",
-            username,
-            email
-        )
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|err| err.into())
-    }
-
     async fn new() -> Result<MyDB, DbError> {
         dotenv().ok();
         let database_url = env::var("DATABASE_URL").expect("DATABASE URL NOT FOUND");
@@ -35,16 +23,69 @@ impl CRUD for MyDB {
         migrate!("./migrations").run(&db_pool).await?;
         Ok(MyDB { pool: db_pool })
     }
+    async fn create_user(&self, username: &str, email: &str) -> Result<i64, DbError> {
+        let res = query!(
+            "INSERT INTO users (username, email) VALUES ($1, $2);",
+            username,
+            email,
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(res.last_insert_rowid())
+    }
+    async fn update_user(
+        &self,
+        id: i64,
+        username: Option<&str>,
+        email: Option<&str>,
+    ) -> Result<(), DbError> {
+        if let Some(username) = username {
+            query!("UPDATE users SET username=$2 WHERE id=$1", id, username)
+                .execute(&self.pool)
+                .await?;
+            return Ok(());
+        };
+        if let Some(email) = email {
+            query!("UPDATE users SET email=$2 WHERE id=$1", id, email)
+                .execute(&self.pool)
+                .await?;
+            return Ok(());
+        };
+        Err(MyError::NoFieldsSet)?
+    }
+
+    async fn find_user(&self, id: Option<i64>, email: Option<&str>) -> Result<User, DbError> {
+        if let Some(id) = id {
+            let user = query_as!(User, "SELECT * FROM users WHERE id=$1", id)
+                .fetch_one(&self.pool)
+                .await?;
+            return Ok(user);
+        }
+        if let Some(email) = email {
+            let user = query_as!(User, "SELECT * FROM users WHERE email=$1", email)
+                .fetch_one(&self.pool)
+                .await?;
+            return Ok(user);
+        }
+        Err(MyError::NoFieldsSet)?
+    }
+
+    async fn delete_user(&self, id: i64) -> Result<(), DbError> {
+        query!("DELETE FROM users WHERE id=$1", id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
 }
 
-#[derive(Encode, Decode, Debug)]
+#[derive(Debug)]
 pub struct User {
     pub id: i64,
     pub username: String,
     pub email: String,
 }
 
-#[derive(Encode, Decode, Debug)]
+#[derive(Debug)]
 pub struct Post {
     pub id: i64,
     pub title: String,
@@ -53,37 +94,36 @@ pub struct Post {
     pub published: bool,
 }
 
-#[derive(Debug)]
+#[derive(Error, Debug)]
 pub enum DbError {
-    VarError(env::VarError),
-    SqlxError(sqlx::Error),
-    StrError(String),
-    MigrateError(MigrateError),
+    #[error(transparent)]
+    EnvError(#[from] env::VarError),
+    #[error(transparent)]
+    SqlxError(#[from] sqlx::Error),
+    #[error(transparent)]
+    ManError(#[from] MyError),
+    #[error(transparent)]
+    MigrateError(#[from] MigrateError),
 }
 
-impl From<sqlx::Error> for DbError {
-    fn from(err: sqlx::Error) -> Self {
-        DbError::SqlxError(err)
-    }
-}
-impl From<env::VarError> for DbError {
-    fn from(err: env::VarError) -> Self {
-        DbError::VarError(err)
-    }
-}
-impl From<String> for DbError {
-    fn from(err: String) -> Self {
-        DbError::StrError(err)
-    }
-}
-impl From<MigrateError> for DbError {
-    fn from(err: MigrateError) -> Self {
-        DbError::MigrateError(err)
-    }
+#[derive(Error, Debug)]
+pub enum MyError {
+    #[error("this is not implemented yet")]
+    Unimplemented,
+    #[error("not enough fields supplid for method")]
+    NoFieldsSet,
 }
 
 #[async_trait]
 pub trait CRUD {
-    async fn create_user(&self, username: &str, email: &str) -> Result<User, DbError>;
     async fn new() -> Result<MyDB, DbError>;
+    async fn create_user(&self, username: &str, email: &str) -> Result<i64, DbError>;
+    async fn update_user(
+        &self,
+        id: i64,
+        username: Option<&str>,
+        email: Option<&str>,
+    ) -> Result<(), DbError>;
+    async fn find_user(&self, id: Option<i64>, email: Option<&str>) -> Result<User, DbError>;
+    async fn delete_user(&self, id: i64) -> Result<(), DbError>;
 }
